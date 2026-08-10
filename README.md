@@ -44,9 +44,14 @@ tests/          # Test suite
 | `risk` | **Implemented** — risk-per-trade sizing, ATR stops, position/leverage caps, drawdown halt |
 | `backtest` | **Implemented** — lookahead-safe event-driven engine, cost model, trade accounting, metrics |
 | `strategies` | **Implemented** — market structure (swings, BOS, FVGs, order blocks, liquidity sweeps), ICT, momentum breakout, mean reversion |
-| `ingestion`, `nlp`, `execution`, `monitoring` | Interface stubs — raise `NotImplementedError` |
+| `execution` | **Implemented (paper only)** — order/position types, paper broker, order manager with risk gate, kill switch, retries |
+| `ingestion`, `nlp`, `monitoring` | Interface stubs — raise `NotImplementedError` |
 
-No live trading is wired up: `execution` has no working broker adapter, by design.
+**No live trading is wired up.** `execution` ships a paper broker only; there is
+deliberately no live broker adapter. Adding one is the step that turns simulated
+orders into real ones and should be a separate, explicit decision — reviewed
+alongside credential handling and position reconciliation — not a side effect of
+a refactor.
 
 ## Getting started
 
@@ -114,6 +119,38 @@ opposite. Measured on synthetic series (1500 bars, 1bp commission, 2bp slippage)
 That mirror-image pattern is the point: a strategy that profits in *both*
 regimes is usually reading the future, not the market. Backtest numbers on
 synthetic data say nothing about live performance.
+
+### Execution
+
+Signals reach a broker only through `OrderManager`, which applies the kill
+switch, drawdown halt, and risk sizing first — a strategy never sizes its own
+position, so a bug in strategy code cannot become an oversized order. The risk
+manager sets the magnitude a full position may take; the signal's `weight`
+supplies direction and scales it.
+
+```python
+from ai_trading.execution import OrderManager, PaperBroker
+from ai_trading.risk import RiskLimits, RiskManager
+from ai_trading.strategies import Signal
+
+broker = PaperBroker(cash=100_000.0)
+broker.update_price("BTC", 100.0)
+
+manager = OrderManager(broker, RiskManager(RiskLimits(risk_per_trade=0.01)))
+report = manager.execute(Signal("BTC", 1.0, "entry"), price=100.0, atr=5.0)
+print(report.accepted, report.reason, report.target_units)
+
+manager.engage_kill_switch("incident")   # blocks new risk; flatten() still works
+```
+
+The kill switch blocks risk-*increasing* orders but always permits flattening —
+a control that reduces exposure must never trap the system in a position it
+cannot exit.
+
+The broker and the backtester implement average-cost accounting independently.
+A regression test drives both with identical prices, costs, sizing, and fill
+timing and asserts they agree exactly; across 300 bars and hundreds of fills
+including long/short flips, they match to floating-point precision.
 
 ## Configuration
 
