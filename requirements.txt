@@ -1,0 +1,21 @@
+# Core data / numerics
+pandas>=2.0
+numpy>=1.24
+
+# HTTP / config
+requests>=2.31
+python-dotenv>=1.0
+pydantic>=2.0
+
+# Market data / execution (crypto unified API)
+ccxt>=4.0
+
+# NLP / models (optional at scaffold stage; uncomment when implementing)
+# transformers>=4.40
+# torch>=2.2
+
+# Backtesting (choose one when implementing)
+# backtrader>=1.9
+
+# Dev / test
+pytest>=8.0
