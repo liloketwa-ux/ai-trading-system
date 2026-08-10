@@ -12,9 +12,9 @@ def test_version() -> None:
 
 
 def test_signal_dataclass() -> None:
-    sig = Signal(symbol="BTC", side="long", confidence=0.8, rationale="test")
+    sig = Signal(symbol="BTC", weight=0.8, rationale="test", confidence=0.8)
     assert sig.symbol == "BTC"
-    assert sig.side == "long"
+    assert sig.side == "long"  # derived from the sign of weight
     assert 0.0 <= sig.confidence <= 1.0
 
 

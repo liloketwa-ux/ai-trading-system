@@ -43,7 +43,8 @@ tests/          # Test suite
 | `features` | **Implemented** — causal indicators (SMA/EMA/RSI/ATR/MACD/Bollinger/z-score), sentiment aggregation, hype scoring |
 | `risk` | **Implemented** — risk-per-trade sizing, ATR stops, position/leverage caps, drawdown halt |
 | `backtest` | **Implemented** — lookahead-safe event-driven engine, cost model, trade accounting, metrics |
-| `ingestion`, `nlp`, `strategies`, `execution`, `monitoring` | Interface stubs — raise `NotImplementedError` |
+| `strategies` | **Implemented** — market structure (swings, BOS, FVGs, order blocks, liquidity sweeps), ICT, momentum breakout, mean reversion |
+| `ingestion`, `nlp`, `execution`, `monitoring` | Interface stubs — raise `NotImplementedError` |
 
 No live trading is wired up: `execution` has no working broker adapter, by design.
 
@@ -91,6 +92,28 @@ equity, and realized trade PnL stay mutually consistent.
 Two tests assert this directly: one checks the history slice always ends at the
 decision bar, and one checks that mutating a future bar cannot change any
 earlier fill.
+
+The same discipline extends to market structure. A swing high is only a swing
+high once bars have printed to its *right* to confirm it, so acting on the pivot
+at its own bar is trading on information that did not exist yet — the most
+common way ICT backtests manufacture fake edge. `find_swings` can only confirm a
+pivot when the confirming bars are inside the frame it was given, so on
+`history[:i+1]` it cannot report a pivot more recent than `i - right`. Every
+zone carries the `confirmed_index` at which it became actionable.
+
+### Regime behaviour
+
+Correct strategies win in the regime they are designed for and lose in its
+opposite. Measured on synthetic series (1500 bars, 1bp commission, 2bp slippage):
+
+| Strategy | Trending | Mean-reverting |
+|---|---|---|
+| `MomentumBreakout` | +302% (Sharpe 1.52) | −93% (Sharpe −1.67) |
+| `MeanReversion` | −68% (Sharpe −1.32) | +309% (Sharpe 1.21) |
+
+That mirror-image pattern is the point: a strategy that profits in *both*
+regimes is usually reading the future, not the market. Backtest numbers on
+synthetic data say nothing about live performance.
 
 ## Configuration
 
