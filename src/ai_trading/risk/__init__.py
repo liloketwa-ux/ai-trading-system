@@ -1,8 +1,8 @@
-"""Risk management: sizing, stops, leverage, drawdown, and VaR limits.
+"""Risk management: sizing, stops, leverage, drawdown, and exposure limits.
 
 See design-doc section 7.
 """
 
-from .manager import RiskManager
+from .manager import RiskDecision, RiskLimits, RiskManager
 
-__all__ = ["RiskManager"]
+__all__ = ["RiskDecision", "RiskLimits", "RiskManager"]

@@ -29,24 +29,68 @@ src/ai_trading/
   features/     # Feature engineering from raw + NLP-processed data
   strategies/   # Strategy definitions (ICT, momentum, mean-reversion, ...)
   backtest/     # Backtesting engine and performance metrics
-  risk/         # Position sizing, stops, leverage/drawdown/VaR controls
+  risk/         # Position sizing, stops, leverage/drawdown controls
   execution/    # Order manager and broker/exchange adapters
   monitoring/   # Dashboards, drift detection, retraining hooks
 docs/           # Design documentation
 tests/          # Test suite
 ```
 
-> **Status:** Scaffold only. Modules define interfaces and raise
-> `NotImplementedError` — no trading logic is implemented yet.
+## Status
+
+| Module | State |
+|---|---|
+| `features` | **Implemented** — causal indicators (SMA/EMA/RSI/ATR/MACD/Bollinger/z-score), sentiment aggregation, hype scoring |
+| `risk` | **Implemented** — risk-per-trade sizing, ATR stops, position/leverage caps, drawdown halt |
+| `backtest` | **Implemented** — lookahead-safe event-driven engine, cost model, trade accounting, metrics |
+| `ingestion`, `nlp`, `strategies`, `execution`, `monitoring` | Interface stubs — raise `NotImplementedError` |
+
+No live trading is wired up: `execution` has no working broker adapter, by design.
 
 ## Getting started
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # then fill in API keys
+pip install -e .        # or: export PYTHONPATH=src
+cp .env.example .env    # then fill in API keys
 pytest
 ```
+
+## Example
+
+```python
+import pandas as pd
+from ai_trading.backtest import Backtester
+from ai_trading.features import FeatureEngine
+
+bars = ...  # OHLCV DataFrame with a sorted DatetimeIndex
+
+features = FeatureEngine().build(bars)
+
+def strategy(history: pd.DataFrame) -> float:
+    """Return a target position weight; NaN means 'no decision yet'."""
+    if len(history) < 50:
+        return float("nan")
+    close = history["close"]
+    return 1.0 if close.iloc[-20:].mean() > close.iloc[-50:].mean() else 0.0
+
+result = Backtester(100_000.0, commission_bps=1, slippage_bps=2).run(bars, strategy)
+print(result.metrics)
+```
+
+### Lookahead safety
+
+The backtester enforces causality structurally rather than by convention: the
+decision for bar `i` receives only `bars.iloc[:i+1]` and fills at bar `i+1`'s
+**open**. A strategy cannot see a price it would not have had, because the
+engine never hands it a longer slice. The final bar's signal is deliberately
+never executed. Slippage and commission are folded into the fill price so cash,
+equity, and realized trade PnL stay mutually consistent.
+
+Two tests assert this directly: one checks the history slice always ends at the
+decision bar, and one checks that mutating a future bar cannot change any
+earlier fill.
 
 ## Configuration
 
