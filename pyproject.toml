@@ -21,7 +21,9 @@ dependencies = [
 [project.optional-dependencies]
 nlp = ["transformers>=4.40", "torch>=2.2"]
 backtest = ["backtrader>=1.9"]
-dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.9"]
+# scipy is test-only: it cross-validates the hand-rolled KS test.
+# The library itself depends on numpy alone.
+dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.9", "scipy>=1.11"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

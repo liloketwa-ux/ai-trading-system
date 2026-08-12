@@ -45,7 +45,8 @@ tests/          # Test suite
 | `backtest` | **Implemented** — lookahead-safe event-driven engine, cost model, trade accounting, metrics |
 | `strategies` | **Implemented** — market structure (swings, BOS, FVGs, order blocks, liquidity sweeps), ICT, momentum breakout, mean reversion |
 | `execution` | **Implemented (paper only)** — order/position types, paper broker, order manager with risk gate, kill switch, retries |
-| `ingestion`, `nlp`, `monitoring` | Interface stubs — raise `NotImplementedError` |
+| `monitoring` | **Implemented** — event log, PSI/KS drift detection, live performance tracking, backtest-vs-live divergence |
+| `ingestion`, `nlp` | Interface stubs — raise `NotImplementedError` |
 
 **No live trading is wired up.** `execution` ships a paper broker only; there is
 deliberately no live broker adapter. Adding one is the step that turns simulated
@@ -151,6 +152,40 @@ The broker and the backtester implement average-cost accounting independently.
 A regression test drives both with identical prices, costs, sizing, and fill
 timing and asserts they agree exactly; across 300 bars and hundreds of fills
 including long/short flips, they match to floating-point precision.
+
+### Monitoring
+
+`Monitor` observes a running system and emits severity-tagged events. It
+deliberately never touches the trading path — responding to a CRITICAL event
+(engaging the kill switch, flattening) stays an explicit decision in the
+execution layer, so monitoring cannot surprise a live system.
+
+```python
+from ai_trading.monitoring import Monitor, MonitorThresholds
+
+monitor = Monitor(MonitorThresholds(drawdown_warning=0.10, drawdown_critical=0.15))
+monitor.record_equity(timestamp, equity)          # escalates on drawdown
+monitor.check_drift(reference_features, live_features)   # PSI + KS per feature
+monitor.check_divergence(backtest_returns)        # paired live-vs-backtest test
+print(monitor.snapshot(), monitor.healthy)
+```
+
+Drift uses two complementary measures: **PSI** for how much probability mass
+moved between bins, and a two-sample **Kolmogorov-Smirnov** test for whether the
+samples plausibly share a distribution at all. KS catches shifts PSI shrugs at —
+a pure variance change leaves the mean untouched but moves the CDF.
+
+Divergence is a *paired* comparison: replay the backtest over the live window
+and difference bar by bar, which removes the shared market move and leaves the
+implementation gap. Live trailing a backtest is the normal case, not proof of a
+bug — backtests omit costs production pays — so a significant result is a prompt
+to investigate, not a verdict.
+
+Both statistics are implemented on numpy alone. A test cross-validates the KS
+implementation against SciPy when it is installed (`pip install -e ".[dev]"`):
+the D statistic matches exactly, and p-values agree at decision-relevant levels.
+The asymptotic p-value diverges from the exact one deep in the tail, where both
+are far past any threshold.
 
 ## Configuration
 
