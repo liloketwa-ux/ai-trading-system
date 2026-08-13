@@ -31,3 +31,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "slow: statistical tests needing many Monte Carlo paths (run with -m slow)",
+]
+addopts = "-m 'not slow'"
