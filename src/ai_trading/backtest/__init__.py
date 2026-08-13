@@ -4,6 +4,13 @@ The engine is structurally lookahead-safe: decisions for bar ``i`` see only
 bars up to ``i`` and fill at bar ``i + 1``'s open.
 """
 
+from .challenge import (
+    ChallengeResult,
+    ChallengeRules,
+    DrawdownType,
+    Outcome,
+    evaluate_challenge,
+)
 from .engine import BacktestResult, Backtester, Fill, SignalFn, Trade
 from .metrics import (
     cagr,
@@ -18,6 +25,11 @@ from .metrics import (
 __all__ = [
     "BacktestResult",
     "Backtester",
+    "ChallengeResult",
+    "ChallengeRules",
+    "DrawdownType",
+    "Outcome",
+    "evaluate_challenge",
     "Fill",
     "SignalFn",
     "Trade",
