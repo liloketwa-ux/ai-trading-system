@@ -2,6 +2,7 @@
 
 from .dataset import DatasetVersion, build_dataset_version, code_commit
 from .features import FeatureSnapshot, derive_feature
+from .quality import AvailabilityRule, DataQuality
 from .records import (
     Availability,
     Observation,
@@ -13,6 +14,8 @@ from .store import InMemoryStore, ObservationStore, ParquetStore, Restatements
 
 __all__ = [
     "Availability",
+    "AvailabilityRule",
+    "DataQuality",
     "DatasetVersion",
     "FeatureSnapshot",
     "InMemoryStore",

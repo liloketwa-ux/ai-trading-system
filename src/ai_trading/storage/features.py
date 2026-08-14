@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Sequence
 
+from .quality import AvailabilityRule, DataQuality
 from .records import Observation, TemporalIntegrityError, utc
 
 __all__ = ["FeatureSnapshot", "derive_feature"]
@@ -34,6 +35,13 @@ class FeatureSnapshot:
     source: str
     feature_version: str = "1"
     inputs: tuple[str, ...] = ()
+    instrument: str = ""
+    timeframe: str | None = None
+    dataset_version: str | None = None
+    provenance_id: str = ""
+    derived_from: tuple[str, ...] = ()
+    data_quality: DataQuality = DataQuality.OK
+    availability_rule: AvailabilityRule = AvailabilityRule.INPUT_MAX
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -45,8 +53,36 @@ class FeatureSnapshot:
                 f"feature {self.name}: available_at precedes event_time"
             )
 
+        if not self.provenance_id:
+            object.__setattr__(self, "provenance_id", self._compute_id())
+
+    def _compute_id(self) -> str:
+        import hashlib
+
+        payload = "|".join([
+            self.name, str(self.feature_version), self.instrument,
+            str(self.timeframe), self.event_time.isoformat(),
+            self.available_at.isoformat(), str(self.value),
+        ])
+        return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+    @property
+    def key(self) -> str:
+        """Versioned identity, e.g. ``atr:v1``."""
+        return f"{self.name}:v{self.feature_version}"
+
+    @property
+    def usable(self) -> bool:
+        """Whether the value may be consumed as a number."""
+        return self.data_quality.usable
+
     def is_eligible_at(self, decision_time: datetime) -> bool:
-        return self.available_at <= utc(decision_time)
+        """Eligible only if available AND of usable quality.
+
+        Availability alone is not enough: a value that arrived on time but is
+        MISSING must not be silently treated as a number.
+        """
+        return self.available_at <= utc(decision_time) and self.data_quality.has_value
 
     def to_observation(self, key: str, ingested_at: datetime) -> Observation:
         return Observation(
@@ -56,7 +92,14 @@ class FeatureSnapshot:
             available_at=self.available_at,
             ingested_at=ingested_at,
             source=self.source,
-            value={"value": self.value, "feature_version": self.feature_version},
+            timeframe=self.timeframe,
+            dataset_version=self.dataset_version,
+            value={
+                "value": self.value,
+                "feature_version": self.feature_version,
+                "data_quality": self.data_quality.value,
+                "availability_rule": self.availability_rule.value,
+            },
             derived_from=self.inputs,
         )
 
