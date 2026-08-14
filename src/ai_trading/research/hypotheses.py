@@ -40,6 +40,8 @@ class Hypothesis:
     expected_direction: str | None = None   # "positive" | "negative" | None
     family: str = "ICT"
     notes: str = ""
+    parent_id: str | None = None
+    condition_label: str = ""
 
     def __post_init__(self) -> None:
         if not self.hypothesis_id:
@@ -80,6 +82,8 @@ class Hypothesis:
             "expected_direction": self.expected_direction,
             "family": self.family,
             "notes": self.notes,
+            "parent_id": self.parent_id,
+            "condition_label": self.condition_label,
             "checksum": self.checksum,
         }
 
@@ -121,6 +125,8 @@ class HypothesisRegistry:
         expected_direction: str | None = None,
         family: str = "ICT",
         notes: str = "",
+        parent_id: str | None = None,
+        condition_label: str = "",
     ) -> Hypothesis:
         """Register a hypothesis. Re-registering with different content raises."""
         hypothesis = Hypothesis(
@@ -137,6 +143,8 @@ class HypothesisRegistry:
             expected_direction=expected_direction,
             family=family,
             notes=notes,
+            parent_id=parent_id,
+            condition_label=condition_label,
         )
         existing = self._hypotheses.get(hypothesis_id)
         if existing is not None and existing.checksum != hypothesis.checksum:
@@ -168,8 +176,26 @@ class HypothesisRegistry:
         return [h for h in self.all() if h.family == name]
 
     def family_size(self, name: str = "ICT") -> int:
-        """Size of the hypothesis family, for multiple-testing correction."""
+        """Size of the hypothesis family, for multiple-testing correction.
+
+        Counts children as trials: a threshold sweep of four values is four
+        tests, not one, and correcting against the parent count alone
+        understates the selection effect.
+        """
         return len(self.family(name))
+
+    def children_of(self, parent_id: str) -> list["Hypothesis"]:
+        return [h for h in self.all() if h.parent_id == parent_id]
+
+    def roots(self, name: str = "ICT") -> list["Hypothesis"]:
+        return [h for h in self.family(name) if h.parent_id is None]
+
+    def tree(self, name: str = "ICT") -> dict[str, list[str]]:
+        """Parent -> child ids, so correction can use the real structure."""
+        return {
+            root.hypothesis_id: [c.hypothesis_id for c in self.children_of(root.hypothesis_id)]
+            for root in self.roots(name)
+        }
 
     def __len__(self) -> int:
         return len(self._hypotheses)
@@ -190,6 +216,8 @@ def _from_dict(payload: dict) -> Hypothesis:
         expected_direction=payload.get("expected_direction"),
         family=payload.get("family", "ICT"),
         notes=payload.get("notes", ""),
+        parent_id=payload.get("parent_id"),
+        condition_label=payload.get("condition_label", ""),
     )
 
 
