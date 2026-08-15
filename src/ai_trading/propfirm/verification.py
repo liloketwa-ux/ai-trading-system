@@ -30,7 +30,8 @@ from typing import Any, Generic, TypeVar
 
 __all__ = [
     "VerificationStatus", "SourceRef", "RuleValue", "UnverifiedRuleError",
-    "UNKNOWN", "verified", "user_supplied", "unknown", "STALENESS_WINDOW",
+    "UNKNOWN", "verified", "user_supplied", "unknown", "not_applicable",
+    "official_verified", "STALENESS_WINDOW", "VerificationMethod",
 ]
 
 T = TypeVar("T")
@@ -43,8 +44,27 @@ class UnverifiedRuleError(RuntimeError):
     """A compliance decision required a rule that is not verified."""
 
 
+class VerificationMethod(str, Enum):
+    """How a value came to be believed.
+
+    ``OFFICIAL_SOURCE_REVIEW`` records a human reading the firm's own current
+    documentation and attesting to the values. It is materially stronger than an
+    unsourced statement and materially weaker than a machine fetch of the page:
+    nobody re-derives it automatically, so it carries a ``verified_at`` and goes
+    stale on the same clock as any other verification.
+    """
+
+    OFFICIAL_SOURCE_REVIEW = "official_source_review"
+    AUTOMATED_FETCH = "automated_fetch"
+    OPERATOR_STATEMENT = "operator_statement"
+    NONE = "none"
+
+
 class VerificationStatus(str, Enum):
-    VERIFIED_OFFICIAL = "verified_official"
+    #: A human reviewed the firm's official current documentation and attested
+    #: to the value, recording the URL, title and review date.
+    OFFICIAL_SOURCE_VERIFIED = "official_source_verified"
+    VERIFIED_OFFICIAL = "verified_official"   # machine-fetched from the source
     USER_SUPPLIED = "user_supplied"
     THIRD_PARTY = "third_party"       # explicitly insufficient on its own
     UNKNOWN = "unknown"
@@ -59,11 +79,22 @@ class VerificationStatus(str, Enum):
         authoritative.
         """
         return self in (VerificationStatus.VERIFIED_OFFICIAL,
+                        VerificationStatus.OFFICIAL_SOURCE_VERIFIED,
                         VerificationStatus.NOT_APPLICABLE)
 
     @property
     def has_value(self) -> bool:
         return self is not VerificationStatus.UNKNOWN
+
+    @property
+    def is_applicable(self) -> bool:
+        """Whether the rule exists for this program at all.
+
+        NOT_APPLICABLE is a fact, not a gap: a program with no daily loss limit
+        is fully specified, and demanding verification of a rule that does not
+        exist would block adjudication forever.
+        """
+        return self is not VerificationStatus.NOT_APPLICABLE
 
 
 @dataclass(frozen=True)
@@ -74,9 +105,23 @@ class SourceRef:
     retrieved_at: datetime | None = None
     document_title: str = ""
     note: str = ""
+    verified_at: date | None = None
+    verification_method: "VerificationMethod" = None  # set in __post_init__
+
+    def __post_init__(self) -> None:
+        if self.verification_method is None:
+            object.__setattr__(self, "verification_method", VerificationMethod.NONE)
 
     @property
     def is_stale(self) -> bool:
+        """Whether the verification has aged out.
+
+        Uses ``verified_at`` when a human performed the review, since that is
+        the date the claim was actually checked.
+        """
+        if self.verified_at is not None:
+            age = date.today() - self.verified_at
+            return age > STALENESS_WINDOW
         if self.retrieved_at is None:
             return True
         return datetime.now(timezone.utc) - self.retrieved_at > STALENESS_WINDOW
@@ -87,6 +132,8 @@ class SourceRef:
             "retrieved_at": self.retrieved_at.isoformat() if self.retrieved_at else None,
             "document_title": self.document_title,
             "note": self.note,
+            "verified_at": self.verified_at.isoformat() if self.verified_at else None,
+            "verification_method": self.verification_method.value,
             "is_stale": self.is_stale,
         }
 
@@ -114,8 +161,17 @@ class RuleValue(Generic[T]):
     def get(self, default: T | None = None) -> T | None:
         return self.value if self.value is not None else default
 
+    @property
+    def is_applicable(self) -> bool:
+        return self.status.is_applicable
+
     def require(self, purpose: str = "compliance") -> T:
         """Return the value, or refuse if it cannot back a compliance claim."""
+        if self.status is VerificationStatus.NOT_APPLICABLE:
+            raise UnverifiedRuleError(
+                f"{self.label or 'rule'} is NOT_APPLICABLE to this program and has "
+                "no value to require"
+            )
         if not self.status.sufficient_for_compliance:
             raise UnverifiedRuleError(
                 f"{self.label or 'rule'} is {self.status.value} and cannot be used for "
@@ -161,6 +217,31 @@ def user_supplied(value: T, *, label: str = "", note: str = "") -> RuleValue[T]:
     return RuleValue(value, VerificationStatus.USER_SUPPLIED,
                      SourceRef(note=note or "supplied by operator; not independently verified"),
                      label)
+
+
+def official_verified(
+    value: T, *, url: str, title: str, verified_at: date, label: str = "",
+) -> RuleValue[T]:
+    """A value attested by human review of the firm's official documentation.
+
+    Distinct from :func:`verified`, which means the code fetched the page. Both
+    are sufficient for compliance; only this one records that a person, not a
+    parser, read the source.
+    """
+    return RuleValue(
+        value, VerificationStatus.OFFICIAL_SOURCE_VERIFIED,
+        SourceRef(url=url, document_title=title, verified_at=verified_at,
+                  verification_method=VerificationMethod.OFFICIAL_SOURCE_REVIEW),
+        label,
+    )
+
+
+def not_applicable(label: str = "", note: str = "") -> RuleValue[Any]:
+    """A rule that does not exist for this program.
+
+    A fact rather than a gap, so it does not block adjudication readiness.
+    """
+    return RuleValue(None, VerificationStatus.NOT_APPLICABLE, SourceRef(note=note), label)
 
 
 def unknown(label: str = "", note: str = "") -> RuleValue[Any]:

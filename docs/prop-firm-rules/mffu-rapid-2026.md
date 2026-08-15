@@ -1,42 +1,69 @@
-# MyFundedFutures — Rapid — ruleset `2026.06-unverified`
+# My Funded Futures — Rapid — ruleset `2026.08`
 
-Comparison profile.
+Sources: *My Funded Futures — Rapid Plans* —
+`https://myfundedfutures.com/plans/rapid`;
+*Consistency Rule at My Funded Futures* —
+`https://help.myfundedfutures.com/en/articles/11994562-consistency-rule-at-my-funded-futures`
 
-> **Verification status: USER_SUPPLIED / UNKNOWN.** `myfundedfutures.com`
-> unreachable. `retrieved_at: null`.
+Verified 2026-08-15 by operator review, outside this coding environment.
+Status `OFFICIAL_SOURCE_VERIFIED`, method `official_source_review`.
 
-## Operator-supplied (NOT verified)
+**Comparison profile.** Not an automated-execution target; the automation policy
+was not verified.
 
-| Rule | Value |
-|---|---|
-| `profit_split` | 90% |
-| `payout_cadence` | daily |
-| `activation_fee` | 0 |
-| `min_trading_days` | 2 |
-| `drawdown_type` | EOD |
-| `daily_loss_limit` | none (encoded as `0`) |
-| `evaluation_consistency` | 50% |
+## Evaluation stage
 
-## ❌ UNRESOLVED — deliberately
+Address: `mffu / rapid / evaluation / <size> @ v2026.08`
 
-Per instruction, **account-size-specific values were not assumed**:
+| Size | `profit_target` | EOD max loss |
+|---|---|---|
+| 25K | 1,500 | 1,000 |
+| 50K | 3,000 | 2,000 |
+| 100K | 6,000 | 3,000 |
+| 150K | 9,000 | 4,500 |
 
-| Rule | Status |
-|---|---|
-| `initial_balance` | UNKNOWN |
-| `profit_target` | UNKNOWN |
-| `mll_threshold` | UNKNOWN |
-| `max_minis` / `max_micros` | UNKNOWN |
-| `mll_basis` | UNKNOWN |
-| `automation_stance` | UNKNOWN |
+At every Rapid evaluation size:
 
-The profile is registered with `account_size = 0` precisely because no verified
-size-specific ruleset exists. This is a placeholder shape, not a usable account
-model.
+- `daily_loss_limit` — **`NOT_APPLICABLE`**, not `UNKNOWN`. Rapid evaluations
+  have none; that is a rule, not a gap, and it does not block readiness.
+- `drawdown_type = "eod"`, `timing = END_OF_DAY`
+- `min_trading_days = 2`
+- consistency `best_day / total ≤ 0.50`
 
-## On `daily_loss_limit = 0`
+### Consistency does not fail the account
 
-Zero encodes *"no daily loss limit"* rather than *"a limit of zero"*. The
-comparison engine treats a falsy limit as no constraint and records no
-violations. Still `USER_SUPPLIED` — the absence of a DLL is itself a rule
-requiring verification.
+Exceeding the 50% threshold does **not** fail a Rapid evaluation — further
+trading can restore compliance. Modelled as `CONSISTENCY_NOT_MET`, never
+`RULE_VIOLATION`, exactly as for Topstep.
+
+### ⚠️ The enforcement clock is not verified
+
+`drawdown_type = eod` is verified. Whether the level is **also enforced
+intraday** was not covered by the review, so `mll_mode` is `UNKNOWN` and
+`build_limit_monitor()` refuses.
+
+That gap is not pedantry. It is the difference between an open loser that ends
+the evaluation the moment it touches the level and one that only matters at the
+close — the same distinction that defines Topstep's MLL. Recording EOD alone and
+running the tracker would be a guess dressed as a rule.
+
+Also `UNKNOWN`: `mll_basis` (balance vs equity), `mll_locks_at`, contract limits
+(`max_minis`, `max_micros`), automation policy, session boundary.
+
+## Funded stage
+
+Address: `mffu / rapid / funded_sim / <size> @ v2026.08`
+
+Registered at all four sizes with **every risk rule `UNKNOWN`.** The funded
+stage was not covered by the review, and its rules are not derived from the
+evaluation's.
+
+Registering the stage empty rather than omitting it is deliberate: a lookup for
+the funded stage now returns a profile that refuses, instead of returning
+nothing and inviting the caller to fall back on the evaluation's EOD numbers.
+`mll_drawdown_type` carries the note *"must not be assumed to match the
+evaluation's EOD rule"*, asserted by test.
+
+## Readiness
+
+Both stages `PARTIALLY_VERIFIED`. No capability is `ADJUDICATION_READY`.

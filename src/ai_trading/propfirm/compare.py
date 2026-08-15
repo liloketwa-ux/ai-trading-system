@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .limits import EligibilityOutcome
 from .profiles import FirmProfile
 from .verification import UnverifiedRuleError
 
@@ -60,14 +61,46 @@ class FirmOutcome:
     undecidable_reasons: list[str] = field(default_factory=list)
     profit_target_distance: float | None = None
     max_drawdown_currency: float = 0.0
-    daily_loss_violations: int = 0
+    #: Sessions the daily loss limit would have locked out. Not failures: a DLL
+    #: flattens the book and ends the session, and the evaluation continues.
+    daily_loss_lockouts: int = 0
     consistency: dict | None = None
+    #: Set when the consistency guideline was missed. Distinct from
+    #: ``failure_reasons`` because a missed guideline raises the profit target
+    #: rather than ending the account.
+    consistency_outcome: EligibilityOutcome | None = None
+    adjusted_profit_target: float | None = None
     trading_day_result: dict | None = None
     position_limit_violations: int = 0
     automation_compatible: bool | None = None
+    #: Rules that do not exist for this program, recorded so a reader can tell
+    #: "no such rule" apart from "rule not checked".
+    not_applicable_rules: list[str] = field(default_factory=list)
+
+    @property
+    def daily_loss_violations(self) -> int:
+        """Deprecated alias. A DLL hit is a lockout, never a violation."""
+        return self.daily_loss_lockouts
+
+    @property
+    def eligibility(self) -> EligibilityOutcome:
+        """One outcome combining hard failures, consistency, and undecidability."""
+        if self.failure_reasons:
+            return EligibilityOutcome.RULE_VIOLATION
+        if self.undecidable_reasons:
+            return EligibilityOutcome.UNDETERMINED
+        if self.consistency_outcome is EligibilityOutcome.CONSISTENCY_NOT_MET:
+            return EligibilityOutcome.CONSISTENCY_NOT_MET
+        return EligibilityOutcome.ELIGIBLE
 
     def to_dict(self) -> dict:
         return {
+            "eligibility": self.eligibility.value,
+            "daily_loss_lockouts": self.daily_loss_lockouts,
+            "consistency_outcome": (self.consistency_outcome.value
+                                    if self.consistency_outcome else None),
+            "adjusted_profit_target": self.adjusted_profit_target,
+            "not_applicable_rules": self.not_applicable_rules,
             "firm_key": self.firm_key,
             "firm_id": self.firm_id,
             "account_size": self.account_size,
@@ -79,8 +112,9 @@ class FirmOutcome:
             "undecidable_reasons": self.undecidable_reasons,
             "profit_target_distance": self.profit_target_distance,
             "max_drawdown_currency": self.max_drawdown_currency,
-            "daily_loss_violations": self.daily_loss_violations,
-            "consistency": self.consistency,
+            "consistency": (self.consistency.to_dict()
+                            if hasattr(self.consistency, "to_dict")
+                            else self.consistency),
             "trading_day_result": self.trading_day_result,
             "position_limit_violations": self.position_limit_violations,
             "automation_compatible": self.automation_compatible,
@@ -98,8 +132,12 @@ def _evaluate(run: StrategyRun, profile: FirmProfile) -> FirmOutcome:
     )
 
     # -- profit target -----------------------------------------------------
+    # NOT_APPLICABLE is a fact, not a gap: a funded account has no evaluation
+    # target, and demanding one would make every funded profile undecidable.
     target = profile.profit_target
-    if target.is_unknown or target.get() is None:
+    if not target.is_applicable:
+        outcome.not_applicable_rules.append("profit_target")
+    elif target.is_unknown or target.get() is None:
         outcome.undecidable_reasons.append("profit_target unverified")
     else:
         outcome.profit_target_distance = target.get() - run.net_profit
@@ -123,31 +161,36 @@ def _evaluate(run: StrategyRun, profile: FirmProfile) -> FirmOutcome:
             )
 
     # -- daily loss limit --------------------------------------------------
+    # A DLL hit flattens the book and locks the session; the account survives.
+    # It is counted, never added to failure_reasons.
     dll = profile.daily_loss_limit
-    if dll.is_unknown:
+    if not dll.is_applicable:
+        outcome.not_applicable_rules.append("daily_loss_limit")
+    elif dll.is_unknown:
         outcome.undecidable_reasons.append("daily_loss_limit unverified")
     else:
         limit = dll.get()
         if limit:
-            outcome.daily_loss_violations = sum(1 for loss in run.daily_losses
-                                                if abs(loss) >= limit)
-            if outcome.daily_loss_violations and dll.is_verified:
-                outcome.failure_reasons.append(
-                    f"{outcome.daily_loss_violations} daily-loss breach(es)"
-                )
+            outcome.daily_loss_lockouts = sum(1 for loss in run.daily_losses
+                                              if abs(loss) >= limit)
 
     # -- consistency -------------------------------------------------------
+    # Missing the guideline raises the profit target. It is not a violation and
+    # does not belong in failure_reasons.
     if profile.consistency is not None:
         result = profile.consistency.evaluate(run.best_day_profit, run.total_profit)
         outcome.consistency = result
-        if result["passes"] is None:
-            outcome.undecidable_reasons.append(f"consistency: {result['reason']}")
-        elif not result["passes"]:
-            outcome.failure_reasons.append(f"consistency: {result['reason']}")
+        outcome.consistency_outcome = result.outcome
+        if result.outcome is EligibilityOutcome.UNDETERMINED:
+            outcome.undecidable_reasons.append(f"consistency: {result.reason}")
+        elif result.outcome is EligibilityOutcome.CONSISTENCY_NOT_MET:
+            outcome.adjusted_profit_target = result.required_total_profit
 
     # -- trading days ------------------------------------------------------
     minimum = profile.min_trading_days
-    if minimum.is_unknown:
+    if not minimum.is_applicable:
+        outcome.not_applicable_rules.append("min_trading_days")
+    elif minimum.is_unknown:
         outcome.undecidable_reasons.append("min_trading_days unverified")
     else:
         required = minimum.get(0)
@@ -188,7 +231,10 @@ def _evaluate(run: StrategyRun, profile: FirmProfile) -> FirmOutcome:
         outcome.decidable = False
         outcome.passed = None
     else:
-        outcome.passed = not outcome.failure_reasons
+        # A missed consistency guideline is not a pass -- the objective moved --
+        # but it is not a violation either, which is what ``eligibility`` says
+        # and ``passed`` alone cannot.
+        outcome.passed = outcome.eligibility is EligibilityOutcome.ELIGIBLE
 
     return outcome
 

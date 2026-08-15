@@ -1,9 +1,14 @@
-# Alpha Futures — ruleset `2026.06-unverified`
+# Alpha Futures — ruleset `2026.08`
 
 **Research comparison only. Explicitly NOT a live-automation target.**
 
-> **Verification status: USER_SUPPLIED / UNKNOWN.** `alphafutures.com`
-> unreachable. `retrieved_at: null`.
+> **Verification status: `UNVERIFIED`.** Alpha Futures was not covered by the
+> 2026-08-15 official source review. `alphafutures.com` remains unreachable from
+> this environment. `retrieved_at: null`.
+
+The instruction was to keep the current semi-automation classification until all
+remaining rules are verified. It stands unchanged, and it stands as an
+*operator statement*, not an official-source attestation.
 
 ## Automation policy (operator-supplied, NOT verified)
 
@@ -13,8 +18,9 @@
 | AI / bots | **prohibited** |
 | `semi_automation` | allowed, subject to manual execution |
 
-Encoded as `AutomationStance.SEMI_ONLY`, so
-`permits_full_automation` returns `False`.
+Encoded as `AutomationStance.SEMI_ONLY`, so `permits_full_automation` returns
+`False`. The stance is `USER_SUPPLIED`: `stance.is_verified` is `False`,
+asserted by test.
 
 ## Consequence in the comparison engine
 
@@ -34,8 +40,11 @@ containing only permissive firms would make the automation constraint invisible.
 ## ❌ UNRESOLVED
 
 Everything else: `initial_balance`, `profit_target`, all MLL fields, position
-limits, `api_available`. Account economics were not supplied and were not
-verified.
+limits, daily loss limit, `api_available`, session boundary. Account economics
+were not supplied and were not verified.
+
+This is the only profile in the registry at `VerificationLevel.UNVERIFIED` —
+every rule backing a decision is unresolved.
 
 ## Why it is not the primary target
 

@@ -1,41 +1,68 @@
-# Apex Trader Funding — EOD PA — ruleset `2026.06-unverified`
+# Apex Trader Funding — EOD Performance Account — ruleset `2026.08`
 
-Comparison profile. **Not** an automation target — Apex's automation policy was
-not established.
+Source: *EOD Performance Accounts (PA)* —
+`https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-performance-accounts-pa/`
 
-> **Verification status: USER_SUPPLIED / UNKNOWN.** `apextraderfunding.com`
-> unreachable. `retrieved_at: null`.
+Verified 2026-08-15 by operator review, outside this coding environment.
+Status `OFFICIAL_SOURCE_VERIFIED`, method `official_source_review`.
 
-## Operator-supplied (NOT verified)
+**Comparison profile.** Apex is not an automated-execution target; its
+automation policy was not verified, and `ExecutionTopology` therefore refuses
+every deployment.
 
-| Account | `max_drawdown` | `max_contracts` |
+Address: `apex / eod_pa / funded_sim / <size> @ v2026.08`
+
+## Verified
+
+| Size | EOD drawdown | Max contracts |
 |---|---|---|
 | 25K | 1,000 | 2 |
 | 50K | 2,000 | 4 |
 | 100K | 3,000 | 6 |
 | 150K | 4,000 | 10 |
 
-- `drawdown_type = eod_trailing`
-- `timing = END_OF_DAY` — intraday trailing drawdown does **not** apply
-- `scaling = tier_based` (limits rise with account size; asserted by test)
-- `profit_split = 100%`
+`profit_split = 1.00` (subject to eligibility). Scaling is tier-based: the
+contract limit rises with account size.
 
-## ❌ UNRESOLVED
+## Drawdown semantics
 
-| Rule | Why |
-|---|---|
-| `daily_loss_limit` | **The operator explicitly instructed not to invent Apex DLL values.** Recorded UNKNOWN with that instruction in the source note. |
-| `profit_target` | Not supplied, not verified |
-| `mll_basis` | balance vs equity not established |
-| `automation_stance` | Apex automation policy not established |
-| `api_available` | not established |
+`MLLMode.EOD_TRAILING_INTRADAY_ENFORCED` — the same *shape* as Topstep's MLL,
+with different amounts:
 
-Because `prohibits_vps` is UNKNOWN, `ExecutionTopology.check()` **fails closed**
-for Apex on *any* deployment — including local — rather than assuming a policy.
+- **No intraday trailing drawdown.** The threshold is calculated once per day
+  from end-of-day balance.
+- **Enforced intraday.** The level that results is then live during the
+  following session.
 
-## Note on the EOD/intraday distinction
+`timing = END_OF_DAY` records how the threshold is computed; `mode` records the
+whole rule, including that it bites during the day. Reading `timing` alone would
+suggest an account can dip below the level intraday and survive, which it
+cannot.
 
-An end-of-day trailing drawdown and an intraday trailing drawdown produce very
-different failure rates from identical trading: the intraday form fails accounts
-on unrealised excursions that the EOD form never sees. `timing` is modelled
-explicitly so the two are never conflated, but Apex's `basis` remains unresolved.
+Apex's daily loss limit is likewise enforced intraday.
+
+## ⚠️ Not verified
+
+| Field | Status | Why it matters |
+|---|---|---|
+| `mll_locks_at` | `UNKNOWN` | whether the threshold freezes at the starting balance is the difference between a drawdown that eventually stops tightening and one that never does |
+| `daily_loss_limit` | `UNKNOWN` | the source confirms a DLL is enforced; the amounts were not verified and the instruction was **not to invent them** |
+| `daily_loss_limit_mode` | `UNKNOWN` | |
+| `max_micros` | `UNKNOWN` | |
+| `automation_stance`, `api_available` | `UNKNOWN` | |
+| `min_trading_days` | `UNKNOWN` | |
+| session boundary | `UNKNOWN` | |
+
+Because the lock behaviour is unknown, `max_loss_limit.build_tracker()` raises
+`UnverifiedRuleError` even though the threshold itself is verified. The amount
+is only half the rule.
+
+## Evaluation stage
+
+**Not registered.** The instruction was explicit: do not invent missing
+evaluation values. `REGISTRY.resolve("apex", "eod_pa", Stage.EVALUATION, ...)`
+returns `None` rather than a plausible fabrication — asserted by test.
+
+## Readiness
+
+`PARTIALLY_VERIFIED`. No capability is `ADJUDICATION_READY`.

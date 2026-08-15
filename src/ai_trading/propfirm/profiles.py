@@ -6,11 +6,11 @@ What lives here is firm-specific structure the generic model has no place for --
 Topstep's Maximum Loss Limit as its own rule type, consistency ratios, position
 limits in minis and micros, and automation policy.
 
-**Nothing in this module is verified.** Every value was supplied by the operator
-and could not be checked against firm documentation, because network access to
-every firm's site is blocked in this environment. Values are therefore
-``USER_SUPPLIED`` and rules whose exact behaviour was not stated are ``UNKNOWN``.
-Compliance assertions refuse on both.
+Every value carries its own provenance and nothing is believed by default. The
+verification architecture is unchanged from the build in which no rule could be
+checked at all: :meth:`RuleValue.require` still refuses, and a profile is
+adjudication-ready only when every field backing a decision is sourced. What
+changed is the *inputs*, not the gate.
 """
 
 from __future__ import annotations
@@ -19,6 +19,22 @@ from dataclasses import dataclass, field
 from datetime import date, time
 from enum import Enum
 
+from .hierarchy import (
+    CAPABILITY_FIELDS,
+    Capability,
+    FieldProvenance,
+    PayoutPolicy,
+    RulesetKey,
+    Stage,
+    VerificationLevel,
+)
+from .limits import (
+    AccountLimitMonitor,
+    DailyLossLimitMode,
+    DailyLossLimitTracker,
+    EligibilityOutcome,
+    MaximumLossLimitTracker,
+)
 from .verification import (
     RuleValue,
     UnverifiedRuleError,
@@ -30,7 +46,7 @@ from .verification import (
 __all__ = [
     "DrawdownBasis", "DrawdownTiming", "MaxLossLimit", "ConsistencyRule",
     "PositionLimits", "AutomationPolicy", "ProhibitedPractice", "FirmProfile",
-    "PropFirmRegistry", "REGISTRY", "AutomationStance",
+    "PropFirmRegistry", "REGISTRY", "AutomationStance", "ConsistencyResult",
 ]
 
 
@@ -71,18 +87,46 @@ class MaxLossLimit:
     timing: RuleValue                 # DrawdownTiming
     basis: RuleValue                  # DrawdownBasis
     locks_at: RuleValue = field(default_factory=lambda: unknown("locks_at"))
+    #: The executable form of ``calculation_method``. Prose describes the rule;
+    #: this is what the tracker actually runs, so it is verified separately.
+    mode: RuleValue = field(default_factory=lambda: unknown("mll_mode"))
 
     @property
     def fully_verified(self) -> bool:
         return all(r.is_verified for r in
                    (self.drawdown_type, self.threshold, self.calculation_method,
-                    self.timing, self.basis))
+                    self.timing, self.basis, self.mode))
 
     @property
     def unresolved(self) -> list[str]:
         return [r.label for r in (self.drawdown_type, self.threshold,
                                   self.calculation_method, self.timing,
-                                  self.basis, self.locks_at) if not r.is_verified]
+                                  self.basis, self.locks_at, self.mode)
+                if not r.is_verified]
+
+    def build_tracker(self, starting_balance: float) -> MaximumLossLimitTracker:
+        """Instantiate a live tracker, refusing on anything unverified.
+
+        The refusal is the point. A tracker built from a guessed threshold runs
+        happily and reports failures that never happened, or misses ones that
+        did -- and its output looks identical either way.
+        """
+        self.require_for_adjudication()
+        if not self.locks_at.is_verified:
+            raise UnverifiedRuleError(
+                "mll_locks_at is unverified: whether the threshold freezes once it "
+                "reaches the starting balance decides whether further profit keeps "
+                "tightening the account, and assuming either way is a guess"
+            )
+        return MaximumLossLimitTracker(
+            starting_balance=float(starting_balance),
+            trailing_amount=float(self.threshold.require("loss-limit tracking")),
+            mode=self.mode.require("loss-limit tracking"),
+            locks_at_starting_balance=(
+                self.locks_at.get() is not None
+                and float(self.locks_at.get()) == float(starting_balance)
+            ),
+        )
 
     def require_for_adjudication(self) -> None:
         """Refuse to adjudicate on an unverified loss limit."""
@@ -108,53 +152,127 @@ class MaxLossLimit:
 
 
 @dataclass(frozen=True)
+class ConsistencyResult:
+    """Outcome of a consistency check, kept distinct from a rule violation."""
+
+    best_day_profit: float
+    total_profit: float
+    best_day_percentage: float | None
+    threshold: float | None
+    threshold_verified: bool
+    outcome: EligibilityOutcome
+    reason: str
+    #: Profit target the trader must now reach for the best day to be within
+    #: the guideline. ``None`` when the guideline is met or undecidable.
+    required_total_profit: float | None = None
+    #: Currency amount the firm recommends as a per-day ceiling, where stated.
+    recommended_max_best_day: float | None = None
+
+    @property
+    def passes(self) -> bool | None:
+        """Kept for callers that only want the tri-state answer."""
+        if self.outcome is EligibilityOutcome.UNDETERMINED:
+            return None
+        return self.outcome is not EligibilityOutcome.CONSISTENCY_NOT_MET
+
+    def __getitem__(self, key: str):
+        """Mapping access, so existing report code keeps working."""
+        return self.to_dict()[key]
+
+    def get(self, key: str, default=None):
+        return self.to_dict().get(key, default)
+
+    def to_dict(self) -> dict:
+        return {
+            "best_day_profit": self.best_day_profit,
+            "total_profit": self.total_profit,
+            "best_day_percentage": self.best_day_percentage,
+            "threshold": self.threshold,
+            "threshold_verified": self.threshold_verified,
+            "outcome": self.outcome.value,
+            "passes": self.passes,
+            "reason": self.reason,
+            "required_total_profit": self.required_total_profit,
+            "recommended_max_best_day": self.recommended_max_best_day,
+        }
+
+
+@dataclass(frozen=True)
 class ConsistencyRule:
-    """Best-day-versus-total profit constraint."""
+    """Best-day-versus-total profit constraint.
+
+    Missing it is **not** a rule violation and the distinction is load-bearing.
+    A consistency breach does not end an evaluation -- it raises the profit
+    target until the best day is a small enough share of the total. Modelling it
+    as a failure would tell a trader their account is dead when it is merely
+    slower, and would make the simulator's pass rate wrong in the pessimistic
+    direction for exactly the strategies that produce one large winner.
+    """
 
     max_best_day_fraction: RuleValue      # e.g. 0.50
     applies_to: RuleValue                 # "evaluation" | "funded" | "both"
     target_increase_effect: RuleValue = field(
         default_factory=lambda: unknown("target_increase_effect")
     )
+    #: Currency ceiling the firm publishes as guidance, where one exists. Advice
+    #: rather than a threshold, so it never drives the outcome.
+    recommended_max_best_day: RuleValue = field(
+        default_factory=lambda: unknown("recommended_max_best_day")
+    )
 
-    def evaluate(self, best_day_profit: float, total_profit: float) -> dict:
-        """Compute the ratio and, where verified, the pass decision.
+    def required_total_for(self, best_day_profit: float) -> float | None:
+        """Total profit at which ``best_day_profit`` satisfies the guideline."""
+        threshold = self.max_best_day_fraction.get()
+        if threshold is None or threshold <= 0 or best_day_profit <= 0:
+            return None
+        return best_day_profit / threshold
+
+    def evaluate(self, best_day_profit: float, total_profit: float) -> ConsistencyResult:
+        """Compute the ratio and, where verified, the outcome.
 
         The ratio is always reported. The *decision* is withheld unless the
         threshold is verified, because a consistency call made against a guessed
         percentage is worse than no call at all.
         """
-        if total_profit <= 0:
-            ratio = None
-        else:
-            ratio = best_day_profit / total_profit
+        ratio = best_day_profit / total_profit if total_profit > 0 else None
+        threshold = self.max_best_day_fraction.get()
+        verified_threshold = self.max_best_day_fraction.is_verified
+        recommended = self.recommended_max_best_day.get()
 
-        result = {
-            "best_day_profit": best_day_profit,
-            "total_profit": total_profit,
-            "best_day_percentage": ratio,
-            "threshold": self.max_best_day_fraction.get(),
-            "threshold_verified": self.max_best_day_fraction.is_verified,
-        }
-        if not self.max_best_day_fraction.is_verified or ratio is None:
-            result["passes"] = None
-            result["reason"] = (
-                "consistency threshold unverified" if ratio is not None
-                else "no positive total profit"
+        if not verified_threshold or ratio is None:
+            return ConsistencyResult(
+                best_day_profit, total_profit, ratio, threshold, verified_threshold,
+                EligibilityOutcome.UNDETERMINED,
+                ("consistency threshold unverified" if ratio is not None
+                 else "no positive total profit"),
+                recommended_max_best_day=recommended,
             )
-        else:
-            threshold = self.max_best_day_fraction.value
-            result["passes"] = ratio < threshold
-            result["reason"] = (
-                f"best day {ratio:.1%} of total, limit {threshold:.0%}"
+
+        if ratio < threshold:
+            return ConsistencyResult(
+                best_day_profit, total_profit, ratio, threshold, True,
+                EligibilityOutcome.ELIGIBLE,
+                f"best day {ratio:.1%} of total, guideline {threshold:.0%}",
+                recommended_max_best_day=recommended,
             )
-        return result
+
+        required = self.required_total_for(best_day_profit)
+        return ConsistencyResult(
+            best_day_profit, total_profit, ratio, threshold, True,
+            EligibilityOutcome.CONSISTENCY_NOT_MET,
+            (f"best day {ratio:.1%} of total exceeds the {threshold:.0%} guideline; "
+             f"the profit target rises to {required:,.2f} rather than the account "
+             "failing"),
+            required_total_profit=required,
+            recommended_max_best_day=recommended,
+        )
 
     def to_dict(self) -> dict:
         return {
             "max_best_day_fraction": self.max_best_day_fraction.to_dict(),
             "applies_to": self.applies_to.to_dict(),
             "target_increase_effect": self.target_increase_effect.to_dict(),
+            "recommended_max_best_day": self.recommended_max_best_day.to_dict(),
         }
 
 
@@ -256,8 +374,22 @@ class FirmProfile:
     max_loss_limit: MaxLossLimit
     position_limits: PositionLimits
     automation: AutomationPolicy
+    stage: Stage = Stage.EVALUATION
+    program_name: str = ""
     consistency: ConsistencyRule | None = None
     daily_loss_limit: RuleValue = field(default_factory=lambda: unknown("daily_loss_limit"))
+    #: Whether a DLL exists on this account and who set it. Separate from the
+    #: amount, because "no limit" and "limit of unknown size" are different
+    #: facts and only one of them blocks adjudication.
+    daily_loss_limit_mode: RuleValue = field(
+        default_factory=lambda: unknown("daily_loss_limit_mode")
+    )
+    #: Amount of the optional limit the firm sells with the account, where one
+    #: exists. Published by the firm but not applied unless the trader elects it.
+    purchase_set_daily_loss_limit: RuleValue = field(
+        default_factory=lambda: unknown("purchase_set_daily_loss_limit")
+    )
+    payout_policy: PayoutPolicy | None = None
     min_trading_days: RuleValue = field(default_factory=lambda: unknown("min_trading_days"))
     trading_day_start: RuleValue = field(default_factory=lambda: unknown("trading_day_start"))
     trading_day_end: RuleValue = field(default_factory=lambda: unknown("trading_day_end"))
@@ -271,15 +403,21 @@ class FirmProfile:
     notes: str = ""
 
     @property
+    def ruleset_key(self) -> RulesetKey:
+        return RulesetKey(self.firm_id, self.program_id, self.stage,
+                          self.account_size, self.ruleset_version)
+
+    @property
     def key(self) -> str:
-        return f"{self.firm_id}/{self.program_id}/{self.account_size}@v{self.ruleset_version}"
+        return str(self.ruleset_key)
 
     @property
     def all_rules(self) -> dict[str, RuleValue]:
-        return {
+        rules = {
             "initial_balance": self.initial_balance,
             "profit_target": self.profit_target,
             "daily_loss_limit": self.daily_loss_limit,
+            "daily_loss_limit_mode": self.daily_loss_limit_mode,
             "min_trading_days": self.min_trading_days,
             "trading_day_start": self.trading_day_start,
             "trading_day_end": self.trading_day_end,
@@ -294,11 +432,17 @@ class FirmProfile:
             "mll_calculation_method": self.max_loss_limit.calculation_method,
             "mll_timing": self.max_loss_limit.timing,
             "mll_basis": self.max_loss_limit.basis,
+            "mll_mode": self.max_loss_limit.mode,
+            "mll_locks_at": self.max_loss_limit.locks_at,
             "max_minis": self.position_limits.max_minis,
             "max_micros": self.position_limits.max_micros,
             "automation_stance": self.automation.stance,
             "api_available": self.automation.api_available,
         }
+        if self.consistency is not None:
+            rules["max_best_day_fraction"] = self.consistency.max_best_day_fraction
+            rules["consistency_applies_to"] = self.consistency.applies_to
+        return rules
 
     @property
     def unresolved_rules(self) -> list[str]:
@@ -307,6 +451,160 @@ class FirmProfile:
     @property
     def fully_verified(self) -> bool:
         return not self.unresolved_rules
+
+    @property
+    def verification_level(self) -> VerificationLevel:
+        """Three-way, because "mostly verified" is its own hazard."""
+        unresolved = self.unresolved_rules
+        if not unresolved:
+            return VerificationLevel.ADJUDICATION_READY
+        if len(unresolved) == len(self.all_rules):
+            return VerificationLevel.UNVERIFIED
+        return VerificationLevel.PARTIALLY_VERIFIED
+
+    # -- capability-scoped readiness --------------------------------------
+    def required_fields(self, capability: Capability) -> tuple[str, ...]:
+        """Fields this capability needs, restricted to ones this profile has.
+
+        A program without a consistency rule has no consistency fields, and
+        demanding them would block a capability that is simply not part of the
+        program.
+        """
+        if capability is Capability.FULL_ADJUDICATION:
+            names: list[str] = []
+            for fields in CAPABILITY_FIELDS.values():
+                names.extend(fields)
+        else:
+            names = list(CAPABILITY_FIELDS[capability])
+        present = self.all_rules
+        return tuple(sorted({n for n in names if n in present}))
+
+    def missing_for(self, capability: Capability) -> list[str]:
+        rules = self.all_rules
+        return [name for name in self.required_fields(capability)
+                if not rules[name].is_verified]
+
+    def supports(self, capability: Capability) -> bool:
+        return not self.missing_for(capability)
+
+    def readiness(self, capability: Capability) -> VerificationLevel:
+        required = self.required_fields(capability)
+        missing = self.missing_for(capability)
+        if not missing:
+            return VerificationLevel.ADJUDICATION_READY
+        if len(missing) == len(required):
+            return VerificationLevel.UNVERIFIED
+        return VerificationLevel.PARTIALLY_VERIFIED
+
+    def require_capability(self, capability: Capability) -> None:
+        missing = self.missing_for(capability)
+        if missing:
+            raise UnverifiedRuleError(
+                f"{self.key} cannot support {capability.value}: "
+                f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} "
+                "not verified against the firm's official current documentation"
+            )
+
+    def capability_report(self) -> dict[str, dict]:
+        return {
+            capability.value: {
+                "readiness": self.readiness(capability).value,
+                "required": list(self.required_fields(capability)),
+                "missing": self.missing_for(capability),
+            }
+            for capability in Capability
+        }
+
+    def field_provenance(self) -> list[FieldProvenance]:
+        """One record per rule, verified or not.
+
+        Emitted for every field rather than only the sourced ones: an audit
+        trail that omits the gaps cannot answer the question it exists for.
+        """
+        records: list[FieldProvenance] = []
+        for name, rule in sorted(self.all_rules.items()):
+            source = rule.source
+            records.append(FieldProvenance(
+                field_name=name,
+                value=rule.value,
+                status=rule.status.value,
+                source_url=source.url,
+                source_title=source.document_title,
+                retrieved_at=source.retrieved_at,
+                verified_at=source.verified_at,
+                verification_method=source.verification_method.value,
+                ruleset_version=self.ruleset_version,
+            ))
+        return records
+
+    def with_daily_loss_limit(self, mode: DailyLossLimitMode,
+                              amount: float | None = None) -> "FirmProfile":
+        """Derive the same ruleset with a daily loss limit configured.
+
+        Optional limits are a per-account choice, not a property of the program,
+        so the registry publishes the program without one and callers opt in.
+        A ``PURCHASE_SET`` limit uses the firm's published amount; a
+        ``PERSONAL_MANUAL`` one requires the trader to state their own, and is
+        recorded as user-supplied because the firm never published it.
+        """
+        from dataclasses import replace
+
+        if mode is DailyLossLimitMode.NONE:
+            return replace(
+                self,
+                daily_loss_limit_mode=self.daily_loss_limit_mode,
+                daily_loss_limit=self.daily_loss_limit,
+            )
+        if mode is DailyLossLimitMode.PURCHASE_SET:
+            published = self.purchase_set_daily_loss_limit
+            if not published.is_verified or published.get() is None:
+                raise UnverifiedRuleError(
+                    f"{self.key} has no verified purchase-set daily loss limit to apply"
+                )
+            limit = published
+        else:
+            if amount is None:
+                raise ValueError(
+                    "a PERSONAL_MANUAL daily loss limit needs the amount the trader "
+                    "set in the platform -- the firm does not publish it"
+                )
+            limit = user_supplied(
+                float(amount), label="daily_loss_limit",
+                note="set by the trader in the platform; not a published firm rule",
+            )
+        return replace(
+            self,
+            daily_loss_limit=limit,
+            daily_loss_limit_mode=user_supplied(
+                mode, label="daily_loss_limit_mode",
+                note="account-level election; the program itself makes it optional",
+            ) if mode is DailyLossLimitMode.PERSONAL_MANUAL
+            else self.purchase_set_daily_loss_limit_mode(),
+        )
+
+    def purchase_set_daily_loss_limit_mode(self) -> RuleValue:
+        """The ``PURCHASE_SET`` mode value, carrying the published amount's source."""
+        source = self.purchase_set_daily_loss_limit.source
+        return RuleValue(DailyLossLimitMode.PURCHASE_SET,
+                         self.purchase_set_daily_loss_limit.status, source,
+                         "daily_loss_limit_mode")
+
+    def build_limit_monitor(self) -> AccountLimitMonitor:
+        """Construct the runtime loss-limit monitor for this ruleset.
+
+        Refuses on anything unverified, via the same gate as everything else.
+        """
+        self.require_capability(Capability.LOSS_LIMIT_TRACKING)
+        starting = float(self.initial_balance.require("loss-limit tracking"))
+        mll = self.max_loss_limit.build_tracker(starting)
+
+        mode = self.daily_loss_limit_mode.require("loss-limit tracking")
+        if mode is DailyLossLimitMode.NONE:
+            dll = DailyLossLimitTracker(amount=None, mode=mode)
+        else:
+            amount = self.daily_loss_limit.require("loss-limit tracking")
+            dll = DailyLossLimitTracker(amount=float(amount), mode=mode)
+        return AccountLimitMonitor(mll=mll, dll=dll)
 
     def require_adjudication_ready(self) -> None:
         """Refuse to adjudicate an account against unverified rules."""
@@ -324,25 +622,38 @@ class FirmProfile:
             "key": self.key,
             "firm_id": self.firm_id,
             "program_id": self.program_id,
+            "program_name": self.program_name,
+            "stage": self.stage.value,
             "account_size": self.account_size,
             "ruleset_version": self.ruleset_version,
             "effective_from": self.effective_from.isoformat(),
             "source_url": self.source_url,
             "retrieved_at": self.retrieved_at.isoformat() if self.retrieved_at else None,
             "verification_status": self.verification_status.value,
+            "verification_level": self.verification_level.value,
             "fully_verified": self.fully_verified,
             "unresolved_rules": self.unresolved_rules,
             "max_loss_limit": self.max_loss_limit.to_dict(),
             "position_limits": self.position_limits.to_dict(),
             "automation": self.automation.to_dict(),
             "consistency": self.consistency.to_dict() if self.consistency else None,
+            "payout_policy": self.payout_policy.to_dict() if self.payout_policy else None,
+            "capabilities": self.capability_report(),
             "rules": {name: rule.to_dict() for name, rule in self.all_rules.items()},
+            "field_provenance": [p.to_dict() for p in self.field_provenance()],
             "notes": self.notes,
         }
 
 
 class PropFirmRegistry:
-    """Versioned catalogue of firm profiles. Published versions are immutable."""
+    """Versioned catalogue of firm profiles, addressed by the full hierarchy.
+
+    Lookup takes every component of the key. There is no ``get("topstep")``,
+    because there is no such thing as Topstep's drawdown -- only a particular
+    program's, at a particular stage, for a particular account size, as of a
+    particular ruleset version. Published versions are immutable; a rule change
+    is a new version, never an edit.
+    """
 
     def __init__(self) -> None:
         self._profiles: dict[str, FirmProfile] = {}
@@ -358,21 +669,75 @@ class PropFirmRegistry:
         self._profiles[profile.key] = profile
         return profile
 
-    def get(self, key: str) -> FirmProfile | None:
-        return self._profiles.get(key)
+    def get(self, key: str | RulesetKey) -> FirmProfile | None:
+        return self._profiles.get(str(key))
+
+    # -- hierarchical navigation -----------------------------------------
+    def firms(self) -> list[str]:
+        return sorted({p.firm_id for p in self._profiles.values()})
+
+    def programs(self, firm_id: str) -> list[str]:
+        return sorted({p.program_id for p in self._profiles.values()
+                       if p.firm_id == firm_id})
+
+    def stages(self, firm_id: str, program_id: str) -> list[Stage]:
+        found = {p.stage for p in self._profiles.values()
+                 if p.firm_id == firm_id and p.program_id == program_id}
+        return sorted(found, key=lambda s: s.value)
+
+    def account_sizes(self, firm_id: str, program_id: str,
+                      stage: Stage) -> list[int]:
+        return sorted({p.account_size for p in self._profiles.values()
+                       if p.firm_id == firm_id and p.program_id == program_id
+                       and p.stage is stage})
+
+    def versions(self, firm_id: str, program_id: str, stage: Stage,
+                 account_size: int) -> list[FirmProfile]:
+        """All published versions for one account, oldest effective date first."""
+        return sorted(
+            (p for p in self._profiles.values()
+             if p.firm_id == firm_id and p.program_id == program_id
+             and p.stage is stage and p.account_size == account_size),
+            key=lambda p: (p.effective_from, p.ruleset_version),
+        )
+
+    def resolve(self, firm_id: str, program_id: str, stage: Stage,
+                account_size: int, *, ruleset_version: str | None = None,
+                as_of: date | None = None) -> FirmProfile | None:
+        """Look up one ruleset, defaulting to the latest effective version.
+
+        ``as_of`` selects the ruleset that was in force on that date rather than
+        the newest one, because a rule published in September does not
+        retroactively govern an evaluation traded in July.
+        """
+        candidates = self.versions(firm_id, program_id, stage, account_size)
+        if ruleset_version is not None:
+            for profile in candidates:
+                if profile.ruleset_version == ruleset_version:
+                    return profile
+            return None
+        if as_of is not None:
+            candidates = [p for p in candidates if p.effective_from <= as_of]
+        return candidates[-1] if candidates else None
 
     def by_firm(self, firm_id: str) -> list[FirmProfile]:
         return sorted((p for p in self._profiles.values() if p.firm_id == firm_id),
-                      key=lambda p: p.account_size)
+                      key=lambda p: (p.program_id, p.stage.value, p.account_size))
 
-    def firms(self) -> list[str]:
-        return sorted({p.firm_id for p in self._profiles.values()})
+    def by_program(self, firm_id: str, program_id: str) -> list[FirmProfile]:
+        return sorted((p for p in self._profiles.values()
+                       if p.firm_id == firm_id and p.program_id == program_id),
+                      key=lambda p: (p.stage.value, p.account_size))
 
     def all(self) -> list[FirmProfile]:
         return sorted(self._profiles.values(), key=lambda p: p.key)
 
     def adjudication_ready(self) -> list[FirmProfile]:
         return [p for p in self._profiles.values() if p.fully_verified]
+
+    def by_verification_level(self, level: VerificationLevel) -> list[FirmProfile]:
+        return sorted((p for p in self._profiles.values()
+                       if p.verification_level is level), key=lambda p: p.key)
 
     def __len__(self) -> int:
         return len(self._profiles)
