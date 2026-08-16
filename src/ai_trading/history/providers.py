@@ -107,10 +107,23 @@ class HistoricalRecord:
 
     source: str
     event_time: datetime
+    #: Effective availability used by point-in-time replay. Derived from the
+    #: provider's policy when the source does not publish a delivery time.
     available_at: datetime
     retrieved_at: datetime
     schema_version: str = SCHEMA_VERSION
     availability_quality: AvailabilityQuality = AvailabilityQuality.UNVERIFIED
+    #: When the *provider* says the datum became available. ``None`` whenever
+    #: the provider does not expose one -- which is the usual case for bar
+    #: files. It is never filled in from ``available_at``: doing so would
+    #: convert this project's bar-completion policy into a claim about the
+    #: provider's delivery time, and the two are different assertions.
+    source_available_at: datetime | None = None
+    #: When this system first saw the datum. Distinct from ``retrieved_at``
+    #: only when a record is re-fetched: observation is once, retrieval repeats.
+    system_observed_at: datetime | None = None
+    #: When it was durably written down.
+    ingested_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.source:
@@ -118,24 +131,61 @@ class HistoricalRecord:
         object.__setattr__(self, "event_time", utc(self.event_time))
         object.__setattr__(self, "available_at", utc(self.available_at))
         object.__setattr__(self, "retrieved_at", utc(self.retrieved_at))
+        for name in ("source_available_at", "system_observed_at", "ingested_at"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, utc(value))
         if self.available_at < self.event_time:
             raise ValueError(
                 f"available_at {self.available_at.isoformat()} precedes event_time "
                 f"{self.event_time.isoformat()} -- a datum cannot be usable before the "
                 "thing it describes has happened"
             )
+        if (self.source_available_at is not None
+                and self.source_available_at < self.event_time):
+            raise ValueError(
+                f"source_available_at {self.source_available_at.isoformat()} precedes "
+                f"event_time {self.event_time.isoformat()}"
+            )
 
     def is_available_at(self, decision_time: datetime) -> bool:
         return self.available_at <= utc(decision_time)
+
+    @property
+    def source_availability_known(self) -> bool:
+        """Whether the provider actually told us when it delivered this.
+
+        False for every bar file this project has seen. Recorded explicitly so
+        that a downstream latency claim can be refused rather than computed
+        from a policy-derived timestamp.
+        """
+        return self.source_available_at is not None
+
+    @property
+    def availability_is_policy_derived(self) -> bool:
+        """``available_at`` came from this project's bar-completion policy.
+
+        Legitimate for research, and **not** a statement about provider
+        delivery time.
+        """
+        return not self.source_availability_known
 
     def provenance(self) -> dict:
         return {
             "source": self.source,
             "event_time": self.event_time.isoformat(),
             "available_at": self.available_at.isoformat(),
+            "source_available_at": (self.source_available_at.isoformat()
+                                    if self.source_available_at else None),
+            "system_observed_at": (self.system_observed_at.isoformat()
+                                   if self.system_observed_at else None),
+            "ingested_at": (self.ingested_at.isoformat()
+                            if self.ingested_at else None),
             "retrieved_at": self.retrieved_at.isoformat(),
             "schema_version": self.schema_version,
             "availability_quality": self.availability_quality.value,
+            "source_availability_known": self.source_availability_known,
+            "availability_is_policy_derived": self.availability_is_policy_derived,
         }
 
 

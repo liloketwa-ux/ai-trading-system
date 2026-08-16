@@ -53,6 +53,29 @@ from .providers import (
     ProviderCapabilityError,
     ProviderDescriptor,
 )
+from .checklist import (
+    CHECKLIST_ITEMS,
+    CheckOutcome,
+    ChecklistItem,
+    DatasetChecklist,
+)
+from .futures_provider import (
+    ContinuousOnlyProviderError,
+    ContractRecord,
+    FuturesDataProvider,
+    InstrumentMetadata,
+    ProviderCredentialError,
+    ProviderManifest,
+    ResponseProvenance,
+    SessionMetadata,
+)
+from .grades import (
+    DatasetGrade,
+    GradeAssessment,
+    GradeError,
+    GradeResult,
+    assess_grades,
+)
 from .replay import LeakageError, LeakageReport, PointInTimeReplay
 from .quality import (
     DatasetQualityReport,
@@ -70,6 +93,11 @@ from .status import (
 )
 
 __all__ = [
+    "CHECKLIST_ITEMS", "CheckOutcome", "ChecklistItem", "DatasetChecklist",
+    "ContinuousOnlyProviderError", "ContractRecord", "FuturesDataProvider",
+    "InstrumentMetadata", "ProviderCredentialError", "ProviderManifest",
+    "ResponseProvenance", "SessionMetadata", "DatasetGrade", "GradeAssessment",
+    "GradeError", "GradeResult", "assess_grades",
     "SCHEMA_VERSION", "AvailabilityError", "AvailabilityPolicy",
     "AvailabilityQuality", "Bar", "ContinuousSeriesRefused", "ContractBook",
     "ContractMetadata", "CoverageWindow", "DataKind", "DataOrigin",

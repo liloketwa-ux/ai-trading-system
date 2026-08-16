@@ -1,7 +1,15 @@
 # Phase 9 — Real Data and Provenance
 
-**Status: the pipeline is built and proven to refuse. No real market data
-entered it.**
+**Status: the pipeline is built, calibrated, and proven to refuse. No real
+market data has entered it.**
+
+> **Update (research-calibration phase).** The research machinery has since
+> been calibrated against five datasets with known generating processes and
+> passes all five objectives — see
+> [`research-calibration.md`](research-calibration.md). That closes one
+> question this document could not answer: the pipeline is not merely running,
+> it demonstrably detects effects that are present and declines effects that
+> are not. It says nothing new about real data, which remains unreachable.
 
 Phase 9's first success criterion is "at least one real historical futures
 dataset is research-approved." That criterion is **not met**, and this document
@@ -398,7 +406,32 @@ re-deriving the evidence.
 
 ---
 
-## 15. Remaining blockers
+## 15. Requirements for the first real NQ dataset
+
+The first dataset is deliberately small: the smallest useful period that
+validates the pipeline, expanded only after it clears the checklist.
+
+| Requirement | Value |
+|---|---|
+| Instrument | `NQ` (CME E-mini Nasdaq-100) |
+| Granularity | individual contracts — **not** a continuous series |
+| First target | one contract, one quarter (e.g. `NQM26`, Mar–Jun 2026) |
+| Timeframes | `1m` if available, else `5m`; `15m` and `1h` derived after approval |
+| Provider | contract-level, with documented adjustments. `databento` (`GLBX.MDP3`) is the best fit |
+| Credentials | environment variable only (e.g. `DATABENTO_API_KEY`), never in source, never in a commit, never pasted into a session |
+| Network | provider host added to the environment's egress allowlist |
+| Contract metadata | expiry mandatory; without it no roll can ever be justified |
+| Session metadata | taken from the provider, not assumed |
+| Instrument metadata | tick size, tick value, multiplier, currency, exchange |
+| Availability | `source_available_at` if the provider exposes it; otherwise `ASSUMED_BAR_CLOSE` and recorded as policy-derived |
+
+Before it is used for anything, it must clear in order: the 14-item checklist,
+the quality gate, point-in-time replay, and the five-grade ladder up to
+`MARKET_CLAIM_ALLOWED`. Only then may the pre-registered ICT campaign consume
+it. Expansion to further contracts and timeframes happens after the first one
+passes, not alongside it.
+
+## 15b. Remaining blockers
 
 1. **Network egress for market data.** The single blocker for criteria 1, 2
    and 5. Requires adding at least one provider host to the environment's
