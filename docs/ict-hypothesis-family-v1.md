@@ -1,4 +1,11 @@
-# ICT Hypothesis Family v1 — LOCKED
+# ICT Hypothesis Family v1 — LOCKED AND FROZEN
+
+> **Permanently frozen as `ICT-FAMILY-V1` on 2026-08-17.** Status:
+> `REAL_DATA_PENDING`. The freeze declaration — the pinned record, the
+> prohibitions, and the `ICT-FAMILY-V2` supersession rules — is in
+> [`ict-family-v1-freeze.md`](ict-family-v1-freeze.md). This document describes
+> what the family *is*; that one describes what may and may not happen to it.
+
 
 > # THIS IS A RESEARCH PROTOCOL, NOT A TRADING STRATEGY.
 >

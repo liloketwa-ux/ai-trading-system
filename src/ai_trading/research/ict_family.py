@@ -491,7 +491,21 @@ class HypothesisFamily:
         pre-registration. It may not *run* against market data until the
         dataset reaches MARKET_CLAIM_ALLOWED.
         """
+        from ..history.datasets import DataOrigin
         from ..history.grades import DatasetGrade
+
+        # Two independent refusals on the same path. The grade ladder already
+        # withholds MARKET_CLAIM_ALLOWED from anything not REAL_MARKET; this
+        # checks the origin directly so a future change to the ladder cannot
+        # quietly open the gate to synthetic data.
+        origin = getattr(dataset, "origin", None)
+        if origin is not None and origin is not DataOrigin.REAL_MARKET:
+            raise PermissionError(
+                f"{self.family_id}@{self.version} may not execute against a "
+                f"dataset of origin {origin.value}: results computed on it "
+                "describe the generator, not a market. Synthetic data is "
+                "legitimate for calibration and is never evidence about NQ."
+            )
 
         grades = getattr(dataset, "grades", None)
         if grades is None or not grades.granted(DatasetGrade.MARKET_CLAIM_ALLOWED):
