@@ -63,6 +63,17 @@ preference). Confusing them would mis-state both.
 
 ## Daily target
 
+The 10% daily target is, explicitly and unchangeably:
+
+```
+USER_DESIRED_DAILY_RETURN
+```
+
+It is **not** `MANDATORY_TRADE_TARGET`. That symbol does not exist —
+`TargetSemantics` has exactly one member, so a caller cannot express the wrong
+interpretation even by mistake, and `target_obliges_trading` is a property
+fixed at `False` rather than a setting.
+
 ```python
 daily_target_pct = 10.0
 daily_target_amount = starting_daily_equity × 10%
@@ -158,13 +169,23 @@ ceiling only binds when nothing else is tighter.
 
 Risk is earned by research evidence:
 
-| Tier | Live risk | Budget |
+| Tier | Eligibility | Budget |
 |---|---|---|
-| `OUT_OF_SAMPLE_FAILURE` | none | 0% |
-| `INSUFFICIENT_SAMPLE` | none | 0% |
-| `PROMISING` | research / paper only | 0% |
-| `SURVIVES_ROBUSTNESS` | small, controlled | 25% of the user ceiling |
-| `ROBUST_CANDIDATE` | eligible for larger | up to 100% of the user ceiling |
+| `INSUFFICIENT_SAMPLE` | `NO_LIVE_RISK` | 0% |
+| `OUT_OF_SAMPLE_FAILURE` | `NO_LIVE_RISK` | 0% |
+| `PROMISING` | `PAPER_ONLY` | 0% |
+| `SURVIVES_ROBUSTNESS` | `LIMITED_RISK_ELIGIBLE` | 25% of the user ceiling |
+| `ROBUST_CANDIDATE` | `FULL_RISK_POLICY_ELIGIBLE` | up to 100% of the user ceiling |
+
+Tier and eligibility are separate types on purpose: the tier is a *finding*
+about research, the eligibility is a *permission* granted on the back of it.
+Keeping them apart means a tier can be redefined without silently
+re-authorising capital.
+
+`FULL_RISK_POLICY_ELIGIBLE` means eligible for the policy ceiling, **not
+entitled to it**. No larger percentage is assigned automatically; the resolved
+risk is still the minimum across firm, system, user, strategy and trade layers,
+and this permission cannot raise any of them.
 
 Budgets are expressed as **fractions of the user's own ceiling**, not as fixed
 percentages. "0.75% for a robust strategy" would be a number with no

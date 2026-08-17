@@ -42,6 +42,7 @@ from typing import Sequence
 
 __all__ = [
     "DailyTargetMode", "TargetReachedAction", "StrategyQualityTier",
+    "TargetSemantics", "RiskEligibility",
     "RiskLayer", "RiskConstraint", "ResolvedRisk", "UserRiskPolicy",
     "DailyTargetState", "TargetFeasibility", "FeasibilityVerdict",
     "DailyMetrics", "resolve_risk", "UserPolicyError",
@@ -50,6 +51,48 @@ __all__ = [
 
 class UserPolicyError(RuntimeError):
     """A user policy was configured or used incoherently."""
+
+
+class TargetSemantics(str, Enum):
+    """What a daily target *means*. There is exactly one legal value.
+
+    The enum has one member because the alternative reading -- that an unmet
+    target obliges the system to trade -- is not a configuration option this
+    system offers. Naming the correct semantics explicitly, and leaving no
+    symbol for ``MANDATORY_TRADE_TARGET``, means a caller cannot express the
+    wrong interpretation even by mistake: there is nothing to pass.
+    """
+
+    USER_DESIRED_DAILY_RETURN = "user_desired_daily_return"
+
+    @property
+    def obliges_trading(self) -> bool:
+        """Always ``False``. A desired return is never a command to trade."""
+        return False
+
+
+class RiskEligibility(str, Enum):
+    """What a strategy's research evidence entitles it to.
+
+    Separate from :class:`StrategyQualityTier` because the tier is a *finding*
+    about research and the eligibility is a *permission* granted on the back of
+    it. Keeping them apart means a tier can be re-defined without silently
+    re-authorising capital.
+    """
+
+    NO_LIVE_RISK = "no_live_risk"
+    PAPER_ONLY = "paper_only"
+    LIMITED_RISK_ELIGIBLE = "limited_risk_eligible"
+    FULL_RISK_POLICY_ELIGIBLE = "full_risk_policy_eligible"
+
+    @property
+    def permits_live_capital(self) -> bool:
+        return self in (RiskEligibility.LIMITED_RISK_ELIGIBLE,
+                        RiskEligibility.FULL_RISK_POLICY_ELIGIBLE)
+
+    @property
+    def permits_paper(self) -> bool:
+        return self is not RiskEligibility.NO_LIVE_RISK
 
 
 class DailyTargetMode(str, Enum):
@@ -125,6 +168,17 @@ class StrategyQualityTier(str, Enum):
     def budget_pct(self, user_max_risk_pct: float) -> float:
         return user_max_risk_pct * self.ceiling_fraction()
 
+    @property
+    def eligibility(self) -> "RiskEligibility":
+        """The permission this tier grants.
+
+        ``FULL_RISK_POLICY_ELIGIBLE`` means eligible for the *policy* ceiling,
+        not entitled to it. The resolved risk is still the minimum across firm,
+        system, user, strategy and trade layers, and this permission cannot
+        raise any of them.
+        """
+        return _TIER_ELIGIBILITY[self]
+
 
 _TIER_RANK = {
     StrategyQualityTier.OUT_OF_SAMPLE_FAILURE: 0,
@@ -141,6 +195,15 @@ _TIER_FRACTION = {
     StrategyQualityTier.PROMISING: 0.0,          # research and paper only
     StrategyQualityTier.SURVIVES_ROBUSTNESS: 0.25,
     StrategyQualityTier.ROBUST_CANDIDATE: 1.0,
+}
+
+
+_TIER_ELIGIBILITY = {
+    StrategyQualityTier.OUT_OF_SAMPLE_FAILURE: RiskEligibility.NO_LIVE_RISK,
+    StrategyQualityTier.INSUFFICIENT_SAMPLE: RiskEligibility.NO_LIVE_RISK,
+    StrategyQualityTier.PROMISING: RiskEligibility.PAPER_ONLY,
+    StrategyQualityTier.SURVIVES_ROBUSTNESS: RiskEligibility.LIMITED_RISK_ELIGIBLE,
+    StrategyQualityTier.ROBUST_CANDIDATE: RiskEligibility.FULL_RISK_POLICY_ELIGIBLE,
 }
 
 
@@ -288,6 +351,16 @@ class UserRiskPolicy:
         """Always true. Present so a caller can assert what it is holding."""
         return True
 
+    @property
+    def target_semantics(self) -> TargetSemantics:
+        """A desired return, never a mandatory one. Fixed, not configurable."""
+        return TargetSemantics.USER_DESIRED_DAILY_RETURN
+
+    @property
+    def target_obliges_trading(self) -> bool:
+        """Always ``False``. An unmet target never requires a position."""
+        return self.target_semantics.obliges_trading
+
     def daily_target_amount(self, starting_daily_equity: float) -> float:
         """Target in currency, from the day's *starting* equity.
 
@@ -309,6 +382,8 @@ class UserRiskPolicy:
         return {
             "kind": "user_policy",
             "daily_target_pct": self.daily_target_pct,
+            "target_semantics": self.target_semantics.value,
+            "target_obliges_trading": self.target_obliges_trading,
             "daily_target_mode": self.daily_target_mode.value,
             "on_target_reached": self.on_target_reached.value,
             "max_risk_per_trade_pct": self.max_risk_per_trade_pct,
