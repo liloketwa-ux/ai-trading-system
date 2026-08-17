@@ -5,7 +5,7 @@
 
 | | Count |
 |---|---|
-| **OBJECTIVE** — may enter the feature engine | **5** |
+| **OBJECTIVE** — implemented in Phase 10 as `:v1` features | **5** |
 | **PARTIALLY_OBJECTIVE** — need our own definition + tests | **11** |
 | **SUBJECTIVE** — knowledge-only until formalised | **2** |
 | With research evidence | **0** |
@@ -29,17 +29,22 @@ OB:v1*, not about the idea of order blocks. Those are different claims, and
 conflating them is how a research programme convinces itself it has disproved
 something it never tested.
 
-## OBJECTIVE (5)
+## OBJECTIVE (5) — ✅ IMPLEMENTED
 
-Computable from bars without judgement. May enter the feature engine directly.
+Computable from bars without judgement. All five are implemented as versioned,
+point-in-time-safe features in Phase 10. See
+[`ict-objective-features.md`](ict-objective-features.md).
 
-| Concept | Aliases | Availability |
-|---|---|---|
-| **Fair Value Gap** | FVG, imbalance, inefficiency, liquidity void | close of bar i+2 |
-| **Displacement** | expansion, energy candle | close of bar i |
-| **Equal High** | EQH, relative equal high | later pivot's confirmation |
-| **Equal Low** | EQL, relative equal low | later pivot's confirmation |
-| **Liquidity Sweep** | stop hunt, liquidity grab, raid, turtle soup, purge | close of bar i |
+| Concept | Feature | Aliases | Availability |
+|---|---|---|---|
+| **Fair Value Gap** | `fvg:v1` | FVG, imbalance, inefficiency, liquidity void | close of bar i+2 |
+| **Displacement** | `displacement:v1` | expansion, energy candle | close of bar i |
+| **Equal High** | `equal_high:v1` | EQH, relative equal high | later pivot's confirmation |
+| **Equal Low** | `equal_low:v1` | EQL, relative equal low | later pivot's confirmation |
+| **Liquidity Sweep** | `liquidity_sweep:v1` | stop hunt, liquidity grab, raid, turtle soup, purge | close of bar i |
+
+Implemented does **not** mean tested. All five remain `UNTESTED` and none has
+evidence.
 
 Three carry caveats worth stating plainly:
 
@@ -51,7 +56,7 @@ Three carry caveats worth stating plainly:
 - **Equal High/Low** need a tolerance. Sources say "roughly equal"; the
   0.1 × ATR is ours, and the pair is never dissolved by later bars.
 
-## PARTIALLY_OBJECTIVE (11)
+## PARTIALLY_OBJECTIVE (11) — ⏸ DEFERRED
 
 Real concepts whose published definitions leave choices open. Each has an
 operational definition of ours at `v1`, and each needs tests before use.
@@ -83,7 +88,7 @@ registered it separately, which would have made lookup order-dependent.
 develops. A zone that changes as price develops has no stable historical value,
 so `OB:v1` creates a new block instead of moving an old one.
 
-## SUBJECTIVE (2)
+## SUBJECTIVE (2) — ⏸ DEFERRED
 
 Knowledge-only. `require_operationalized()` raises.
 
@@ -113,12 +118,16 @@ the permissive direction.
 
 Collisions are refused at registration.
 
-## What may become a feature
+## Implementation status
 
-Only the 5 objective concepts, and only through `FeatureSnapshot` and
-`derive_feature()`. The 11 partially objective ones need their `v1` definitions
-implemented and tested first. The 2 subjective ones need somebody to formalise
-them, which may never happen.
+| | Count | Status |
+|---|---|---|
+| OBJECTIVE | 5 | ✅ implemented as `:v1`, `UNTESTED` |
+| PARTIALLY_OBJECTIVE | 11 | ⏸ `v1` definitions written, not implemented |
+| SUBJECTIVE | 2 | ⏸ not formalised, may never be |
+
+The 13 deferred concepts remain registered and unavailable to research;
+`may_enter_feature_engine` is `False` for each, asserted by test.
 
 Every operational definition states its own `available_at` rule, because that is
 where the audit of the reference implementation found every single defect.
