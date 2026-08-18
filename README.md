@@ -36,7 +36,40 @@ docs/           # Design documentation
 tests/          # Test suite
 ```
 
-## Status
+## Status: `EVIDENCE_PENDING`
+
+**The research engine is implemented. Real-market evidence is pending.**
+
+No hypothesis has been evaluated against real market data, because no real
+market dataset has been obtained. That is the entire state of the project, and
+everything below should be read against it:
+
+- **No profitability is claimed or demonstrated.** Nothing here has produced a
+  P&L on a real market.
+- **No claim is made that ICT works.** `ICT-FAMILY-V1` is six pre-registered
+  *questions*, frozen before the data existed, with no answers yet. A null
+  result is a possible and legitimate outcome.
+- **Not ready for a funded account.** Prop-firm rules are modelled and the
+  account simulation runs; no strategy has out-of-sample evidence to put
+  through it.
+- **Live automation is not ready and is not enabled.** There is no live broker
+  adapter and no funded-account credential.
+
+Results computed on synthetic data describe the generator. They are useful —
+the calibration suite is what shows the machinery is not blind — and they are
+never evidence about a real market.
+
+```bash
+python -m ai_trading.project.cli system:status   # derived, deterministic
+python -m ai_trading.project.cli system:audit    # 8 read-only integrity checks
+```
+
+Full detail: [`docs/system-readiness.md`](docs/system-readiness.md). The single
+next action is external — obtain and authorise access to a real NQ data
+provider — specified in
+[`docs/real-data-handoff.md`](docs/real-data-handoff.md).
+
+### Modules
 
 | Module | State |
 |---|---|
